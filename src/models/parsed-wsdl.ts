@@ -1,33 +1,17 @@
 import sanitizeFilename from "sanitize-filename";
 
-export type DefinitionProperty =
-    | {
-          name: string;
-          sourceName: string;
-          description?: string;
-          kind: "PRIMITIVE";
-          isArray?: boolean;
-          type: string;
-      }
-    | {
-          name: string;
-          sourceName: string;
-          description?: string;
-          /**
-           * This is very information to know, because
-           * you can avoid circular references with this
-           */
-          kind: "REFERENCE";
-          isArray?: boolean;
-          ref: Definition;
-      };
+export type XmlType =
+    | { kind: "PRIMITIVE"; type: string }
+    | { kind: "REFERENCE"; ref: string }
+    | { kind: "ARRAY"; type: XmlType }
+    | { kind: "MAP"; properties: { propName: string; type: XmlType }[] };
 
 export interface Definition {
     name: string;
     sourceName: string;
     description?: string;
     docs: string[];
-    properties: Array<DefinitionProperty>;
+    type: XmlType;
 }
 
 export interface Method {

@@ -1,6 +1,7 @@
 import path from "path";
 import camelCase from "camelcase";
 import {
+    CodeBlockWriter,
     ImportDeclarationStructure,
     MethodSignatureStructure,
     OptionalKind,
@@ -9,7 +10,7 @@ import {
     Structure,
     StructureKind,
 } from "ts-morph";
-import { Definition, Method, ParsedWsdl } from "./models/parsed-wsdl";
+import { Definition, Method, ParsedWsdl, XmlType } from "./models/parsed-wsdl";
 import { Logger } from "./utils/logger";
 
 export interface Options {
@@ -32,6 +33,36 @@ function createProperty(
     };
 }
 
+function allCasesHandled(p: never): any {}
+function writeType(imports: string[], t: XmlType): { code: string; imports: string[] } {
+    if (t.kind === "PRIMITIVE") {
+        return { code: t.type, imports };
+    } else if (t.kind === "ARRAY") {
+        const inner = writeType(imports, t.type);
+        return { code: `(${inner.code})[]`, imports: imports.concat(inner.imports) };
+    } else if (t.kind === "REFERENCE") {
+        return { code: t.ref, imports: imports.concat([t.kind]) };
+    } else if (t.kind === "MAP") {
+        const acc = t.properties.reduce(
+            (acc, p) => {
+                const inner = writeType(acc.imports, p.type);
+                return {
+                    imports: inner.imports,
+                    code:
+                        acc.code + (acc.code === "" ? "" : ",\n") + p.propName + ": " + inner.code,
+                };
+            },
+            { imports: imports, code: "" }
+        );
+        return {
+            imports: acc.imports,
+            code: "{\n " + acc.code + "}",
+        };
+    } else {
+        return allCasesHandled(t);
+    }
+}
+
 function generateDefinitionFile(
     project: Project,
     definition: null | Definition,
@@ -47,45 +78,52 @@ function generateDefinitionFile(
 
     generated.push(definition);
 
-    const definitionImports: OptionalKind<ImportDeclarationStructure>[] = [];
-    const definitionProperties: PropertySignatureStructure[] = [];
-    for (const prop of definition.properties) {
-        if (prop.kind === "PRIMITIVE") {
-            // e.g. string
-            definitionProperties.push(
-                createProperty(prop.name, prop.type, prop.description, prop.isArray)
-            );
-        } else if (prop.kind === "REFERENCE") {
-            // e.g. Items
-            if (!generated.includes(prop.ref)) {
-                // Wasn't generated yet
-                generateDefinitionFile(
-                    project,
-                    prop.ref,
-                    defDir,
-                    [...stack, prop.ref.name],
-                    generated
-                );
-            }
-            definitionImports.push({
-                moduleSpecifier: `./${prop.ref.name}`,
-                namedImports: [{ name: prop.ref.name }],
-            });
-            definitionProperties.push(
-                createProperty(prop.name, prop.ref.name, prop.sourceName, prop.isArray)
-            );
-        }
-    }
+    // const definitionImports: OptionalKind<ImportDeclarationStructure>[] = [];
+    // const definitionProperties: PropertySignatureStructure[] = [];
+    // for (const prop of definition.properties) {
+    //     if (prop.kind === "PRIMITIVE") {
+    //         // e.g. string
+    //         definitionProperties.push(
+    //             createProperty(prop.name, prop.type, prop.description, prop.isArray)
+    //         );
+    //     } else if (prop.kind === "REFERENCE") {
+    //         // e.g. Items
+    //         if (!generated.includes(prop.ref)) {
+    //             // Wasn't generated yet
+    //             generateDefinitionFile(
+    //                 project,
+    //                 prop.ref,
+    //                 defDir,
+    //                 [...stack, prop.ref.name],
+    //                 generated
+    //             );
+    //         }
+    //         definitionImports.push({
+    //             moduleSpecifier: `./${prop.ref.name}`,
+    //             namedImports: [{ name: prop.ref.name }],
+    //         });
+    //         definitionProperties.push(
+    //             createProperty(prop.name, prop.ref.name, prop.sourceName, prop.isArray)
+    //         );
+    //     }
+    // }
 
-    defFile.addImportDeclarations(definitionImports);
+    const { code, imports } = writeType([], definition.type);
+
+    defFile.addImportDeclarations(
+        imports.map((i) => ({
+            moduleSpecifier: i,
+            namedImports: [{ name: i }],
+        }))
+    );
     defFile.addStatements([
         {
             leadingTrivia: (writer) => writer.newLine(),
             isExported: true,
             name: defName,
             docs: [definition.docs.join("\n")],
-            kind: StructureKind.Interface,
-            properties: definitionProperties,
+            kind: StructureKind.TypeAlias,
+            type: code,
         },
     ]);
     Logger.log(`Writing Definition file: ${path.resolve(path.join(defDir, defName))}.ts`);

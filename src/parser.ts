@@ -8,14 +8,7 @@ import {
     ComplexContentElement,
 } from "soap/lib/wsdl/elements";
 import { open_wsdl, WSDL } from "soap/lib/wsdl/index";
-import {
-    Definition,
-    DefinitionProperty,
-    Method,
-    ParsedWsdl,
-    Port,
-    Service,
-} from "./models/parsed-wsdl";
+import { Definition, XmlType, Method, ParsedWsdl, Port, Service } from "./models/parsed-wsdl";
 import { stripExtension } from "./utils/file";
 import { reservedKeywords } from "./utils/javascript";
 import { Logger } from "./utils/logger";
@@ -31,19 +24,11 @@ type VisitedDefinition = {
     definition: Definition;
 };
 
-function findReferenceDefiniton(visited: Array<VisitedDefinition>, definitionParts: object) {
-    return visited.find((def) => def.parts === definitionParts);
+function findReferenceDefiniton(visited: Array<VisitedDefinition>, name: string) {
+    return visited.find((def) => def.name === name);
 }
 
-function getPartsOfComplexType(type: ComplexTypeElement): [string, Element][] {
-    if (type.children[0] instanceof SequenceElement) {
-        return type.children[0].children.map((f) => [f.$name, f]);
-    } else {
-        return type.children.map((f) => [f.$name, f]);
-    }
-}
-
-function parseComplexType(
+function findTypeByName(
     parsedWsdl: ParsedWsdl,
     wsdl: WSDL,
     options: Options,
@@ -51,7 +36,8 @@ function parseComplexType(
     visitedDefs: Array<VisitedDefinition>,
     name: string,
     namespace: string
-): Definition {
+): XmlType {
+    debugger;
     const split = !namespace && name.includes(":") ? name.split(":") : null;
     const ns = split
         ? wsdl.definitions.xmlns[split[0]] || split[0]
@@ -60,39 +46,41 @@ function parseComplexType(
         throw new Error(`parseComplexType: No namespace provided, name: ${name}`);
     }
     const defName = split ? split[1] : name;
-    const type = wsdl.definitions.schemas[ns].complexTypes[defName];
-    if (!type) {
-        throw new Error(`parseComplexType: Complex type not found, name: ${name}, ns: ${ns}`);
+    const type = wsdl.definitions.schemas[ns]?.complexTypes[defName];
+
+    const visited = findReferenceDefiniton(visitedDefs, defName);
+    if (visited) {
+        // By referencing already declared definition, we will avoid circular references
+        return {
+            kind: "REFERENCE",
+            ref: visited.name,
+        };
     }
+
+    if (!type) {
+        // throw new Error(`parseComplexType: Complex type not found, name: ${name}, ns: ${ns}`);
+        return { kind: "PRIMITIVE", type: defName };
+    }
+
+    const t = handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, [
+        type.children[0].$name,
+        type.children[0],
+    ]);
+
     const def: Definition = {
         name: `${options.modelNamePreffix}${parsedWsdl.findNonCollisionDefinitionName(defName)}${
             options.modelNameSuffix
         }`,
         sourceName: defName,
         docs: [name],
-        properties: [],
+        type: t,
         description: "",
     };
-
-    const propsAndDocs = flatten(
-        getPartsOfComplexType(type).map((p) =>
-            handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, p)
-        )
-    );
-
-    def.properties = propsAndDocs.filter(isDefProp);
-    def.docs = propsAndDocs.filter(isString);
 
     parsedWsdl.definitions.push(def);
 
     debugger;
-    return def;
-}
-
-function flatten<T>(arr: T[][]): T[] {
-    return arr.reduce(function (flat, a) {
-        return flat.concat(a);
-    }, []);
+    return t;
 }
 
 function handleProp(
@@ -102,84 +90,94 @@ function handleProp(
     stack: string[],
     visitedDefs: Array<VisitedDefinition>,
     [propName, type]: [string, Element]
-): (DefinitionProperty | string)[] {
+): XmlType | null {
     if (propName === "targetNSAlias") {
-        return [`targetNSAlias \`${type}\``];
+        return null; // [`targetNSAlias \`${type}\``];
     } else if (propName === "targetNamespace") {
-        return [`targetNamespace \`${type}\``];
-    } else if (type instanceof ComplexContentElement) {
-    } else if (type instanceof SequenceElement) {
-        return flatten(
-            type.children.map((e) =>
-                handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, [e.$name, e])
-            )
-        );
-    } else if (propName.endsWith("[]")) {
-        const stripedPropName = propName.substring(0, propName.length - 2);
-        // Array of
-        if (typeof type === "string") {
-            // primitive type
-            return [
-                {
-                    kind: "PRIMITIVE",
-                    name: stripedPropName,
-                    sourceName: propName,
-                    description: type,
-                    type: "string",
-                    isArray: true,
-                },
-            ];
+        return null; // [`targetNamespace \`${type}\``];
+    } else if (type instanceof Element && (type as any).$base === "soapenc:Array") {
+        const typeC = type.children.find((c) => (c as any).$ref === "soapenc:arrayType");
+        if (typeC) {
+            const arrayType = (typeC as any)["$n1:arrayType"]; // eg: ns1:TEmployee[] . TODO: Can this namespace be dynamic?
+            const subDefinition = findTypeByName(
+                parsedWsdl,
+                wsdl,
+                options,
+                stack,
+                visitedDefs,
+                arrayType.substring(0, arrayType.length - 2),
+                ""
+                // propName,
+                // type,
+                // [...stack, propName],
+                // visitedDefs
+            );
+            return { kind: "ARRAY", type: subDefinition };
         } else {
-            // With sub-type
-            const visited = findReferenceDefiniton(visitedDefs, type);
-            if (visited) {
-                // By referencing already declared definition, we will avoid circular references
-                return [
-                    {
-                        kind: "REFERENCE",
-                        name: stripedPropName,
-                        sourceName: propName,
-                        ref: visited.definition,
-                        isArray: true,
-                    },
-                ];
-            } else {
-                const subDefinition = parseDefinition(
-                    parsedWsdl,
-                    wsdl,
-                    options,
-                    stripedPropName,
-                    type,
-                    [...stack, propName],
-                    visitedDefs
-                );
-                return [
-                    {
-                        kind: "REFERENCE",
-                        name: stripedPropName,
-                        sourceName: propName,
-                        ref: subDefinition,
-                        isArray: true,
-                    },
-                ];
-            }
+            throw new Error("soapenc:Array with soapenc:arrayType");
         }
+    } else if (type instanceof ComplexContentElement) {
+        return {
+            kind: "MAP",
+            properties: [
+                {
+                    propName: "item",
+                    type: handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, [
+                        type.children[0].$name,
+                        type.children[0],
+                    ]),
+                },
+            ],
+        };
+    } else if (type instanceof SequenceElement) {
+        return {
+            kind: "MAP",
+            properties: type.children.map((e) => ({
+                propName: e.$name,
+                type: handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, [e.$name, e]),
+            })),
+        };
+    } else if (type instanceof ComplexTypeElement) {
+        // todo find existing
+        const subDefinition = findTypeByName(
+            parsedWsdl,
+            wsdl,
+            options,
+            stack,
+            visitedDefs,
+            type.$name,
+            typeof type.xmlns === "string" ? type.xmlns : null
+            // propName,
+            // type,
+            // [...stack, propName],
+            // visitedDefs
+        );
+        return subDefinition;
+    } else if (type instanceof ElementElement && type.$type) {
+        // todo find existing
+        const subDefinition = findTypeByName(
+            parsedWsdl,
+            wsdl,
+            options,
+            stack,
+            visitedDefs,
+            type.$type,
+            typeof type.xmlns === "string" ? type.xmlns : null
+            // propName,
+            // type,
+            // [...stack, propName],
+            // visitedDefs
+        );
+        return subDefinition;
     } else {
         if (typeof type === "string") {
             // primitive type
-            return [
-                {
-                    kind: "PRIMITIVE",
-                    name: propName,
-                    sourceName: propName,
-                    description: type,
-                    type: "string",
-                    isArray: false,
-                },
-            ];
-        } else if (type instanceof ComplexTypeElement) {
-            // todo find existing
-            const subDefinition = parseComplexType(
+            return {
+                kind: "PRIMITIVE",
+                type: "string",
+            };
+        } else {
+            const subDefinition = findTypeByName(
                 parsedWsdl,
                 wsdl,
                 options,
@@ -187,87 +185,10 @@ function handleProp(
                 visitedDefs,
                 type.$name,
                 typeof type.xmlns === "string" ? type.xmlns : null
-                // propName,
-                // type,
-                // [...stack, propName],
-                // visitedDefs
             );
-            return [
-                {
-                    kind: "REFERENCE",
-                    name: propName,
-                    sourceName: propName,
-                    ref: subDefinition,
-                    isArray: false,
-                },
-            ];
-        } else if (type instanceof ElementElement && type.$type) {
-            // todo find existing
-            const subDefinition = parseComplexType(
-                parsedWsdl,
-                wsdl,
-                options,
-                stack,
-                visitedDefs,
-                type.$type,
-                typeof type.xmlns === "string" ? type.xmlns : null
-                // propName,
-                // type,
-                // [...stack, propName],
-                // visitedDefs
-            );
-            return [
-                {
-                    kind: "REFERENCE",
-                    name: propName,
-                    sourceName: propName,
-                    ref: subDefinition,
-                    isArray: false,
-                },
-            ];
-        } else {
-            const reference = findReferenceDefiniton(visitedDefs, type);
-            if (reference) {
-                // By referencing already declared definition, we will avoid circular references
-                return [
-                    {
-                        kind: "REFERENCE",
-                        name: propName,
-                        sourceName: propName,
-                        description: "",
-                        ref: reference.definition,
-                        isArray: false,
-                    },
-                ];
-            } else {
-                const subDefinition = parseDefinition(
-                    parsedWsdl,
-                    wsdl,
-                    options,
-                    propName,
-                    type,
-                    [...stack, propName],
-                    visitedDefs
-                );
-                return [
-                    {
-                        kind: "REFERENCE",
-                        name: propName,
-                        sourceName: propName,
-                        ref: subDefinition,
-                        isArray: false,
-                    },
-                ];
-            }
+            return subDefinition;
         }
     }
-}
-
-function isDefProp(t: string | DefinitionProperty): t is DefinitionProperty {
-    return typeof t !== "string";
-}
-function isString(t: string | DefinitionProperty): t is string {
-    return typeof t === "string";
 }
 
 /**
@@ -289,17 +210,6 @@ function parseDefinition(
 ): Definition {
     const defName = camelCase(name, { pascalCase: true });
 
-    const definition: Definition = {
-        name: `${options.modelNamePreffix}${parsedWsdl.findNonCollisionDefinitionName(defName)}${
-            options.modelNameSuffix
-        }`,
-        sourceName: defName,
-        docs: [name],
-        properties: [],
-        description: "",
-    };
-    visitedDefs.push({ name: definition.name, parts: defParts, definition }); // NOTE: cache reference to this defintion globally (for avoiding circular references)
-
     if (defParts) {
         // NOTE: `node-soap` has sometimes problem with parsing wsdl files, it includes `defParts.undefined = undefined`
         if ("undefined" in defParts && defParts.undefined === undefined) {
@@ -311,20 +221,33 @@ function parseDefinition(
                 parts: defParts,
             });
         } else {
-            const propsAndDocs = Object.entries(defParts).map((p) =>
-                handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, p)
-            );
+            const t: XmlType = {
+                kind: "MAP",
+                properties: Object.entries(defParts).map(([k, p]) => ({
+                    propName: k,
+                    type: handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, [k, p]),
+                })),
+            };
 
-            definition.properties = propsAndDocs.filter(isDefProp);
-            definition.docs = propsAndDocs.filter(isString);
+            const definition: Definition = {
+                name: `${options.modelNamePreffix}${parsedWsdl.findNonCollisionDefinitionName(
+                    defName
+                )}${options.modelNameSuffix}`,
+                sourceName: defName,
+                docs: [name],
+                type: t,
+                description: "",
+            };
+
+            parsedWsdl.definitions.push(definition);
+
+            visitedDefs.push({ name: definition.name, parts: defParts, definition }); // NOTE: cache reference to this defintion globally (for avoiding circular references)
+
+            return definition;
         }
-    } else {
-        // TODO: Doesn't have parts :(
     }
-
-    parsedWsdl.definitions.push(definition);
-
-    return definition;
+    // TODO: Doesn't have parts :(
+    throw new Error("Definition without parts");
 }
 
 // TODO: Add logs
