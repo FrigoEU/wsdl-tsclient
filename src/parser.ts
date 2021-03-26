@@ -37,7 +37,9 @@ function findTypeByName(
     name: string,
     namespace: string
 ): XmlType {
-    debugger;
+    if (!name) {
+        return null;
+    }
     const split = !namespace && name.includes(":") ? name.split(":") : null;
     const ns = split
         ? wsdl.definitions.xmlns[split[0]] || split[0]
@@ -79,7 +81,6 @@ function findTypeByName(
 
     parsedWsdl.definitions.push(def);
 
-    debugger;
     return t;
 }
 
@@ -170,24 +171,16 @@ function handleProp(
         );
         return subDefinition;
     } else {
-        if (typeof type === "string") {
-            // primitive type
-            return {
-                kind: "PRIMITIVE",
-                type: "string",
-            };
-        } else {
-            const subDefinition = findTypeByName(
-                parsedWsdl,
-                wsdl,
-                options,
-                stack,
-                visitedDefs,
-                type.$name,
-                typeof type.xmlns === "string" ? type.xmlns : null
-            );
-            return subDefinition;
-        }
+        const subDefinition = findTypeByName(
+            parsedWsdl,
+            wsdl,
+            options,
+            stack,
+            visitedDefs,
+            type.$name,
+            typeof type.xmlns === "string" ? type.xmlns : null
+        );
+        return subDefinition;
     }
 }
 
@@ -285,7 +278,6 @@ export async function parseWsdl(wsdlPath: string, options: Options): Promise<Par
                     const portMethods: Method[] = [];
 
                     for (const [methodName, method] of Object.entries(port.binding.methods)) {
-                        debugger;
                         // [O_CustomerChange]
 
                         // TODO: Deduplicate code below by refactoring it to external function. Is it possible ?
