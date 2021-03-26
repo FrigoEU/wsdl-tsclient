@@ -9,6 +9,9 @@
   "engines": {
     "node": ">=10.0.0"
   },
+  "files": [
+    "*"
+  ],
   "scripts": {
     "pretest": "rm -rf ./test/generated",
     "test": "ts-node ./test/generate-clients.test.ts",
@@ -17,7 +20,8 @@
     "dev": "ts-node -T ./dev.ts",
     "dist": "tsc",
     "build": "tsc",
-    "format": "npx prettier --write ./src"
+    "format": "npx prettier --write ./src",
+    "prepare": "npm run build"
   },
   "repository": {
     "type": "git",
