@@ -170,6 +170,17 @@ function handleProp(
             // visitedDefs
         );
         return subDefinition;
+    } else if (typeof type === "string") {
+        const subDefinition = findTypeByName(
+            parsedWsdl,
+            wsdl,
+            options,
+            stack,
+            visitedDefs,
+            type,
+            null
+        );
+        return subDefinition;
     } else {
         const subDefinition = findTypeByName(
             parsedWsdl,
