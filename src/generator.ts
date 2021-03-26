@@ -324,9 +324,9 @@ export async function generate(
                             type: method.paramDefinition ? method.paramDefinition.name : "{}",
                         },
                     ],
-                    returnType: `Promise<${
+                    returnType: `Promise<[${
                         method.returnDefinition ? method.returnDefinition.name : "unknown"
-                    }>`,
+                    }]>`,
                 })),
             },
         ]);

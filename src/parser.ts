@@ -122,7 +122,7 @@ function handleProp(
             kind: "MAP",
             properties: [
                 {
-                    propName: "item",
+                    propName: "item?",
                     type: handleProp(parsedWsdl, wsdl, options, stack, visitedDefs, [
                         type.children[0].$name,
                         type.children[0],
