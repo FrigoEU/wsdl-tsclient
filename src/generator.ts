@@ -36,7 +36,22 @@ function createProperty(
 function allCasesHandled(p: never): any {}
 function writeType(imports: string[], t: XmlType): { code: string; imports: string[] } {
     if (t.kind === "PRIMITIVE") {
-        return { code: t.type, imports };
+        const typstr =
+            t.type.toLowerCase() === "string"
+                ? "string"
+                : t.type.toLowerCase() === "int"
+                ? "number"
+                : t.type.toLowerCase() === "decimal"
+                ? "number"
+                : t.type.toLowerCase() === "boolean"
+                ? "boolean"
+                : t.type.toLowerCase() === "datetime"
+                ? "Date"
+                : t.type.toLowerCase() === "date"
+                ? "Date"
+                : "unknown";
+
+        return { code: typstr + " | null", imports };
     } else if (t.kind === "ARRAY") {
         const inner = writeType(imports, t.type);
         return { code: `(${inner.code})[]`, imports: imports.concat(inner.imports) };
@@ -63,18 +78,17 @@ function writeType(imports: string[], t: XmlType): { code: string; imports: stri
     }
 }
 
-function generateDefinitionFile(
+function pushDefinitions(
     project: Project,
     definition: null | Definition,
     defDir: string,
     stack: string[],
     generated: Definition[]
 ): void {
-    const defName = camelCase(definition.name, { pascalCase: true });
-    const defFilePath = path.join(defDir, `${defName}.ts`);
-    const defFile = project.createSourceFile(defFilePath, "", {
-        overwrite: true,
-    });
+    // const defFilePath = path.join(defDir, `${defName}.ts`);
+    // const defFile = project.createSourceFile(defFilePath, "", {
+    //     overwrite: true,
+    // });
 
     generated.push(definition);
 
@@ -108,26 +122,14 @@ function generateDefinitionFile(
     //     }
     // }
 
-    const { code, imports } = writeType([], definition.type);
-
-    defFile.addImportDeclarations(
-        imports.map((i) => ({
-            moduleSpecifier: i,
-            namedImports: [{ name: i }],
-        }))
-    );
-    defFile.addStatements([
-        {
-            leadingTrivia: (writer) => writer.newLine(),
-            isExported: true,
-            name: defName,
-            docs: [definition.docs.join("\n")],
-            kind: StructureKind.TypeAlias,
-            type: code,
-        },
-    ]);
-    Logger.log(`Writing Definition file: ${path.resolve(path.join(defDir, defName))}.ts`);
-    defFile.saveSync();
+    // defFile.addImportDeclarations(
+    //     imports.map((i) => ({
+    //         moduleSpecifier: i,
+    //         namedImports: [{ name: i }],
+    //     }))
+    // );
+    // Logger.log(`Writing Definition file: ${path.resolve(path.join(defDir, defName))}.ts`);
+    // defFile.saveSync();
 }
 
 export async function generate(
@@ -144,8 +146,10 @@ export async function generate(
     const allMethods: Method[] = [];
     const allDefintions: Definition[] = [];
 
+    const clientDefImports: string[] = [];
     const clientImports: Array<OptionalKind<ImportDeclarationStructure>> = [];
     const clientServices: Array<OptionalKind<PropertySignatureStructure>> = [];
+
     for (const service of parsedWsdl.services) {
         const serviceFilePath = path.join(servicesDir, `${service.name}.ts`);
         const serviceFile = project.createSourceFile(serviceFilePath, "", {
@@ -160,7 +164,7 @@ export async function generate(
                 overwrite: true,
             });
 
-            const portImports: Array<OptionalKind<ImportDeclarationStructure>> = [];
+            const portImports: string[] = [];
             const portFileMethods: Array<OptionalKind<MethodSignatureStructure>> = [];
             for (const method of port.methods) {
                 // TODO: Deduplicate PortImports
@@ -168,49 +172,29 @@ export async function generate(
                     method.paramDefinition !== null &&
                     !allDefintions.includes(method.paramDefinition)
                 ) {
-                    generateDefinitionFile(
+                    pushDefinitions(
                         project,
                         method.paramDefinition,
                         defDir,
                         [method.paramDefinition.name],
                         allDefintions
                     );
-                    clientImports.push({
-                        moduleSpecifier: `./definitions/${method.paramDefinition.name}`,
-                        namedImports: [{ name: method.paramDefinition.name }],
-                    });
-                    portImports.push({
-                        moduleSpecifier: path.join(
-                            "..",
-                            "definitions",
-                            method.paramDefinition.name
-                        ),
-                        namedImports: [{ name: method.paramDefinition.name }],
-                    });
+                    clientDefImports.push(method.paramDefinition.name);
+                    portImports.push(method.paramDefinition.name);
                 }
                 if (
                     method.returnDefinition !== null &&
                     !allDefintions.includes(method.returnDefinition)
                 ) {
-                    generateDefinitionFile(
+                    pushDefinitions(
                         project,
                         method.returnDefinition,
                         defDir,
                         [method.returnDefinition.name],
                         allDefintions
                     );
-                    clientImports.push({
-                        moduleSpecifier: `./definitions/${method.returnDefinition.name}`,
-                        namedImports: [{ name: method.returnDefinition.name }],
-                    });
-                    portImports.push({
-                        moduleSpecifier: path.join(
-                            "..",
-                            "definitions",
-                            method.returnDefinition.name
-                        ),
-                        namedImports: [{ name: method.returnDefinition.name }],
-                    });
+                    clientDefImports.push(method.returnDefinition.name);
+                    portImports.push(method.returnDefinition.name);
                 }
                 // TODO: Deduplicate PortMethods
                 allMethods.push(method);
@@ -241,7 +225,12 @@ export async function generate(
                     isReadonly: true,
                     type: port.name,
                 });
-                portFile.addImportDeclarations(portImports);
+                portFile.addImportDeclarations([
+                    {
+                        moduleSpecifier: path.join("..", "definitions", "definitions"),
+                        namedImports: portImports,
+                    },
+                ]);
                 portFile.addStatements([
                     {
                         leadingTrivia: (writer) => writer.newLine(),
@@ -280,6 +269,27 @@ export async function generate(
         }
     } // End of Service
 
+    const defFilePath = path.join(defDir, `definitions.ts`);
+    const defFile = project.createSourceFile(defFilePath, "", {
+        overwrite: true,
+    });
+    allDefintions.forEach(function (definition) {
+        const { code } = writeType([], definition.type);
+        const defName = camelCase(definition.name, { pascalCase: true });
+
+        defFile.addStatements([
+            {
+                leadingTrivia: (writer) => writer.newLine(),
+                isExported: true,
+                name: defName,
+                docs: [definition.docs.join("\n")],
+                kind: StructureKind.TypeAlias,
+                type: code,
+            },
+        ]);
+        defFile.saveSync();
+    });
+
     if (!options.emitDefinitionsOnly) {
         const clientFilePath = path.join(outDir, "client.ts");
         const clientFile = project.createSourceFile(clientFilePath, "", {
@@ -291,6 +301,10 @@ export async function generate(
                 { name: "Client", alias: "SoapClient" },
                 { name: "createClientAsync", alias: "soapCreateClientAsync" },
             ],
+        });
+        clientImports.push({
+            moduleSpecifier: `./definitions/definitions`,
+            namedImports: clientDefImports,
         });
         clientFile.addImportDeclarations(clientImports);
         clientFile.addStatements([
@@ -341,12 +355,12 @@ export async function generate(
         overwrite: true,
     });
 
-    indexFile.addExportDeclarations(
-        allDefintions.map((def) => ({
-            namedExports: [def.name],
-            moduleSpecifier: `./definitions/${def.name}`,
-        }))
-    );
+    indexFile.addExportDeclarations([
+        {
+            namedExports: allDefintions.map((def) => def.name),
+            moduleSpecifier: `./definitions/definitions`,
+        },
+    ]);
     if (!options.emitDefinitionsOnly) {
         // TODO: Aggregate all exports during decleartions generation
         // https://ts-morph.com/details/exports
